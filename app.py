@@ -1,85 +1,125 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 
-# Sayfa Ayarları
-st.set_page_config(page_title="3D Atölye ERP", layout="wide")
+# Sayfa Genişliği
+st.set_page_config(page_title="3D Atölye Üretim & BOM", layout="wide")
 
-def excel_islee(uploaded_file):
+# --- FONKSİYONLAR ---
+def veri_yukle(file):
     try:
-        # 1. FİLAMENT SAYFASINI OKU
-        # Filament sayfan düzgün, direkt okuyoruz
-        df_fil = pd.read_excel(uploaded_file, sheet_name=0)
+        # Filament (Sayfa 1)
+        df_fil = pd.read_excel(file, sheet_name=0)
         
-        # 2. HIRDAVAT SAYFASINI OKU (ÖNEMLİ DÜZELTME BURADA)
-        # header=1 diyoruz ki en üstteki "STANDART MALZEMELER" yazısını atlasın.
-        df_hir = pd.read_excel(uploaded_file, sheet_name=1, header=1, usecols="A:H")
+        # Hırdavat (Sayfa 2) - Başlık satırını bulmaya çalışır
+        df_hir = pd.read_excel(file, sheet_name=1, header=1) 
         
-        # Sütun isimlerini biz verelim ki Excel'deki "ÜRÜN\nADI" gibi alt satıra geçen yazılar hata vermesin
-        df_hir.columns = ['DIN_KOD', 'URUN_ADI', 'ACIKLAMA', 'STOK_ADET', 'ALINAN_ADET', 'ALIS_FIYATI', 'TEDARIKCI', 'TARIH']
+        # Sütun isimlerini sabitleyelim (Excel'deki karmaşayı önlemek için)
+        # Senin Excel sırasına göre: Kod, Ad, Açıklama, Stok, Alınan, Fiyat...
+        df_hir = df_hir.iloc[:, 0:8] # İlk 8 sütunu al
+        df_hir.columns = ['KOD', 'URUN_ADI', 'ACIKLAMA', 'STOK', 'ALINAN_ADET', 'PAKET_FIYATI', 'TEDARIKCI', 'TARIH']
         
-        # Temizlik: Fiyatı boş olan veya sayı olmayan satırları at
-        df_hir = df_hir.dropna(subset=['ALIS_FIYATI'])
-        df_hir = df_hir[pd.to_numeric(df_hir['ALIS_FIYATI'], errors='coerce').notnull()]
+        # Temizlik ve Hesaplama
+        df_hir = df_hir.dropna(subset=['PAKET_FIYATI']) # Fiyatı olmayanları at
+        df_hir['PAKET_FIYATI'] = pd.to_numeric(df_hir['PAKET_FIYATI'], errors='coerce')
+        df_hir['ALINAN_ADET'] = pd.to_numeric(df_hir['ALINAN_ADET'], errors='coerce')
         
-        # Maliyet Hesabı (Toplam Fiyat / Toplam Adet)
-        df_hir['Birim_Maliyet'] = df_hir['ALIS_FIYATI'] / df_hir['ALINAN_ADET']
+        # Birim Maliyet Hesabı
+        df_hir['BIRIM_MALIYET'] = df_hir['PAKET_FIYATI'] / df_hir['ALINAN_ADET']
         
         return df_fil, df_hir
     except Exception as e:
-        st.error(f"Hata Detayı: {e}")
         return None, None
 
-st.title("🛠️ Bulut Atölye ERP")
-st.markdown("---")
+# --- ARAYÜZ ---
+st.title("🏭 3D Atölye Üretim Yönetimi")
 
-dosya = st.file_uploader("SARF MALZEME.xlsx Dosyanı Yükle", type=['xlsx'])
+# Oturum Durumu (Sepet Mantığı İçin)
+if 'rechete_listesi' not in st.session_state:
+    st.session_state.rechete_listesi = []
+
+# 1. ADIM: EXCEL YÜKLEME
+with st.sidebar:
+    st.header("Depo Verisi")
+    dosya = st.file_uploader("SARF MALZEME.xlsx Yükle", type=['xlsx'])
 
 if dosya:
-    fil_df, hir_df = excel_islee(dosya)
+    df_fil, df_hir = veri_yukle(dosya)
     
-    if fil_df is not None and hir_df is not None:
-        st.success("✅ Excel Başarıyla Okundu!")
+    if df_hir is not None:
+        st.sidebar.success("✅ Depo Bağlandı")
         
-        tab1, tab2, tab3 = st.tabs(["🧵 Filament Stok", "🔩 Hırdavat & Maliyet", "💰 Ürün Maliyet Hesapla"])
+        # SEKME YAPISI
+        tab1, tab2, tab3 = st.tabs(["📝 BOM (Reçete) Oluştur", "📦 Ürün Listem", "🔍 Depo Stokları"])
         
+        # --- TAB 1: BOM OLUŞTURMA (SENİN İSTEDİĞİN YER) ---
         with tab1:
-            st.dataframe(fil_df, use_container_width=True)
-            # Kısa özet
-            st.info(f"Toplam {len(fil_df)} makara filament kaydı var.")
+            st.header("Yeni Ürün Reçetesi Hazırla")
+            
+            # Ürün Bilgileri
+            col_u1, col_u2 = st.columns(2)
+            urun_adi = col_u1.text_input("Üretilecek Ürün Adı", placeholder="Örn: Basketbol Sahası")
+            urun_kodu = col_u2.text_input("Ürün Kodu (SKU)", placeholder="Örn: PRD-001")
+            
+            st.markdown("---")
+            
+            # Malzeme Ekleme Alanı
+            c1, c2, c3 = st.columns([3, 1, 1])
+            
+            # Tüm malzemeleri tek listede birleştir (İsim + Açıklama)
+            malzeme_secenekleri = df_hir['URUN_ADI'].astype(str) + " (" + df_hir['ACIKLAMA'].astype(str) + ")"
+            
+            secilen_malzeme = c1.selectbox("Depodan Malzeme Seç", malzeme_secenekleri)
+            adet = c2.number_input("Adet", min_value=1, value=1)
+            
+            # Seçilen malzemenin maliyetini bul
+            secilen_data = df_hir[malzeme_secenekleri == secilen_malzeme].iloc[0]
+            birim_maliyet = secilen_data['BIRIM_MALIYET']
+            
+            if c3.button("➕ Reçeteye Ekle"):
+                st.session_state.rechete_listesi.append({
+                    "Malzeme": secilen_malzeme,
+                    "Adet": adet,
+                    "Birim Maliyet": birim_maliyet,
+                    "Toplam": adet * birim_maliyet
+                })
+                st.success(f"{adet} adet {secilen_malzeme} eklendi!")
 
+            # Reçete Tablosu
+            if st.session_state.rechete_listesi:
+                st.write("### 📋 Şu Anki Reçete Listesi")
+                rechete_df = pd.DataFrame(st.session_state.rechete_listesi)
+                st.dataframe(rechete_df, use_container_width=True)
+                
+                # Toplam Hesap
+                toplam_maliyet = rechete_df['Toplam'].sum()
+                
+                # Filament Ekleme (Manuel)
+                st.info("Filament maliyetini aşağıdan manuel ekleyebilirsin:")
+                f_col1, f_col2 = st.columns(2)
+                fil_gram = f_col1.number_input("Harcanan Filament (Gram)", value=0)
+                fil_fiyat = f_col2.number_input("Filament Gram Maliyeti (TL)", value=0.5)
+                fil_toplam = fil_gram * fil_fiyat
+                
+                GENEL_TOPLAM = toplam_maliyet + fil_toplam
+                
+                st.markdown(f"""
+                ### 💰 TOPLAM MALİYET: :green[{GENEL_TOPLAM:.2f} TL]
+                """)
+                
+                if st.button("💾 BU ÜRÜNÜ KAYDET (Simülasyon)"):
+                    st.toast(f"{urun_adi} başarıyla sisteme kaydedildi!")
+                    st.balloons()
+            
+        # --- TAB 2: ÜRÜN LİSTEM (DEMO) ---
         with tab2:
-            # Sadece önemli sütunları gösterelim
-            gosterilecek_tablo = hir_df[['URUN_ADI', 'ACIKLAMA', 'STOK_ADET', 'Birim_Maliyet']].copy()
-            st.dataframe(gosterilecek_tablo, use_container_width=True)
-            st.caption("ℹ️ Birim maliyetler, paket fiyatının adede bölünmesiyle hesaplanmıştır.")
+            st.write("Burada daha önce kaydettiğin BOM listeleri listelenecek.")
+            st.info("Şu an veritabanı bağlı olmadığı için kaydettiklerin sayfa yenilenince gider. Kalıcı olması için Google Sheets bağlamamız gerekecek.")
 
+        # --- TAB 3: DEPO STOKLARI ---
         with tab3:
-            st.header("Maliyet Hesaplayıcı")
+            st.dataframe(df_hir, use_container_width=True)
             
-            col1, col2 = st.columns(2)
-            with col1:
-                # Kullanıcıya listeden ürün seçtiriyoruz
-                liste = hir_df['URUN_ADI'].astype(str) + " - " + hir_df['ACIKLAMA'].astype(str)
-                secim = st.selectbox("Malzeme Seç", liste)
-                adet = st.number_input("Kaç Adet Lazım?", min_value=1, value=1)
-                
-            with col2:
-                # Seçilen ürünün fiyatını bulup hesaplıyoruz
-                secilen_veri = hir_df.iloc[liste[liste == secim].index[0]]
-                birim_fiyat = secilen_veri['Birim_Maliyet']
-                
-                hirdavat_tutari = birim_fiyat * adet
-                st.metric("Parça Maliyeti", f"{hirdavat_tutari:.2f} TL")
-            
-            st.divider()
-            
-            # Filament Hesabı
-            f_gram = st.number_input("Harcanacak Filament (Gram)", value=50)
-            f_birim_fiyat = st.number_input("Filament Gram Maliyeti (Ortalama 0.6 TL)", value=0.60)
-            fil_tutari = f_gram * f_birim_fiyat
-            
-            st.warning(f"TOPLAM MALİYET: {hirdavat_tutari + fil_tutari:.2f} TL")
-
     else:
-        st.warning("Dosya okunurken bir sorun oldu. Lütfen sütun başlıklarını kontrol et.")
+        st.error("Excel formatı okunamadı. Lütfen 'SARF MALZEME' dosyasını yüklediğinden emin ol.")
+else:
+    st.info("Başlamak için soldaki menüden Excel dosyanı yükle.")
