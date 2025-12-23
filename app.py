@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="3D Atölye ERP Pro", layout="wide")
+st.set_page_config(page_title="3D Atölye ERP - V6", layout="wide")
 
-# --- YARDIMCI: PARA TEMİZLEME ---
+# --- FONKSİYONLAR ---
 def temizle_para(deger):
     if pd.isna(deger): return 0.0
     if isinstance(deger, (int, float)): return float(deger)
@@ -13,153 +13,121 @@ def temizle_para(deger):
     except:
         return 0.0
 
-# --- YARDIMCI: DEPO VERİSİNİ OKU ---
-def depo_oku(dosya):
-    try:
-        # Filament (Sayfa 1)
-        df_fil = pd.read_excel(dosya, sheet_name=0)
-        
-        # Hırdavat (Sayfa 2) - 2. satır başlık
-        df_hir = pd.read_excel(dosya, sheet_name=1, header=1)
-        df_hir = df_hir.iloc[:, :8] # İlk 8 sütun
-        df_hir.columns = ['DIN', 'URUN', 'ACIKLAMA', 'STOK', 'ALINAN', 'PAKET_FIYATI', 'TEDARIKCI', 'TARIH']
-        
-        # Hesaplamalar
-        df_hir = df_hir.dropna(subset=['PAKET_FIYATI'])
-        df_hir['PAKET_FIYATI'] = df_hir['PAKET_FIYATI'].apply(temizle_para)
-        df_hir['ALINAN'] = df_hir['ALINAN'].apply(temizle_para)
-        df_hir['BIRIM_MALIYET'] = df_hir['PAKET_FIYATI'] / df_hir['ALINAN']
-        
-        # Seçim Listesi İçin Yeni Sütun (Ad + Açıklama)
-        df_hir['SECIM_ISMI'] = df_hir['URUN'].astype(str) + " - " + df_hir['ACIKLAMA'].astype(str)
-        
-        return df_fil, df_hir
-    except Exception as e:
-        return None, None
-
 # --- ARAYÜZ ---
-st.title("🏭 3D Atölye ERP (BOM Modülü)")
+st.title("🏭 3D Atölye Üretim & Maliyet (V6)")
 
-# Session State (Sepet Hafızası)
-if 'sepet' not in st.session_state:
-    st.session_state.sepet = []
+# Session State (Hafıza)
+if 'secilen_urun_kodu' not in st.session_state:
+    st.session_state.secilen_urun_kodu = None
+if 'bom_listesi' not in st.session_state:
+    st.session_state.bom_listesi = []
 
+# --- YAN MENÜ: DOSYALAR ---
 with st.sidebar:
-    st.header("📂 Dosyalar")
+    st.header("📂 Veri Deposu")
     dosya_sarf = st.file_uploader("1. SARF MALZEME.xlsx", type=['xlsx'], key="sarf")
-    dosya_urun = st.file_uploader("2. ÜRÜN LİSTESİ.xlsx (Opsiyonel)", type=['xlsx'], key="urun")
+    dosya_urun = st.file_uploader("2. ÜRÜN LİSTESİ.xlsx", type=['xlsx'], key="urun")
 
-    # Depo verisini bir kere oku ve hafızaya al
+    # Depo Verisini Oku
+    df_hir = None
     if dosya_sarf:
-        df_fil, df_hir = depo_oku(dosya_sarf)
-    else:
-        df_fil, df_hir = None, None
-
-# SEKMELER
-tab1, tab2, tab3 = st.tabs(["📝 YENİ REÇETE (BOM) OLUŞTUR", "📋 Mevcut Ürün Listeleri", "📦 Depo Stokları"])
-
-# --- TAB 1: REÇETE OLUŞTURUCU (SENİN İSTEDİĞİN) ---
-with tab1:
-    if df_hir is not None:
-        st.subheader("Yeni Ürün Maliyet Hesaplayıcı")
-        
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            st.info("👇 Malzemeleri Buradan Ekle")
-            
-            # 1. Depodan Malzeme Seç
-            malzeme_listesi = df_hir['SECIM_ISMI'].unique()
-            secilen_malzeme = st.selectbox("Parça Seç", malzeme_listesi)
-            adet = st.number_input("Adet", min_value=1, value=1)
-            
-            if st.button("Sepete Ekle ➕"):
-                # Seçilenin fiyatını bul
-                veri = df_hir[df_hir['SECIM_ISMI'] == secilen_malzeme].iloc[0]
-                birim_fiyat = veri['BIRIM_MALIYET']
-                
-                st.session_state.sepet.append({
-                    "Malzeme": secilen_malzeme,
-                    "Adet": adet,
-                    "Birim Maliyet": birim_fiyat,
-                    "Tutar": adet * birim_fiyat
-                })
-                st.success(f"{secilen_malzeme} eklendi.")
-
-            st.markdown("---")
-            
-            # 2. Filament Ekle
-            st.write("🧵 **Filament Hesabı**")
-            gramaj = st.number_input("Harcanan Gram", value=0)
-            gram_maliyet = st.number_input("Gram Maliyeti (TL)", value=0.55) # Ortalama
-            
-            if st.button("Listeyi Temizle 🗑️"):
-                st.session_state.sepet = []
-                st.rerun()
-
-        with col2:
-            st.write("### 🧾 Ürün Reçetesi")
-            
-            if st.session_state.sepet or gramaj > 0:
-                # Sepeti Tablo Yap
-                df_sepet = pd.DataFrame(st.session_state.sepet)
-                
-                if not df_sepet.empty:
-                    st.dataframe(df_sepet, use_container_width=True)
-                    toplam_parca = df_sepet['Tutar'].sum()
-                else:
-                    toplam_parca = 0
-                
-                # Filament Tutarı
-                fil_tutar = gramaj * gram_maliyet
-                
-                st.divider()
-                st.write(f"🔩 **Parça Toplamı:** {toplam_parca:.2f} TL")
-                st.write(f"🧵 **Filament Toplamı:** {fil_tutar:.2f} TL")
-                
-                genel_toplam = toplam_parca + fil_tutar
-                st.markdown(f"## 💰 TOPLAM MALİYET: :green[{genel_toplam:.2f} TL]")
-                
-                st.warning("Not: Bu reçeteyi beğendiysen Excel dosyanın 'ÜRÜN LİSTESİ' kısmına yeni satır olarak ekleyebilirsin.")
-            else:
-                st.info("Henüz malzeme seçmedin.")
-
-    else:
-        st.warning("👈 Önce soldan 'SARF MALZEME' dosyasını yükle ki stokları görebileyim.")
-
-# --- TAB 2: MEVCUT LİSTELER (ESKİ V4 ÖZELLİĞİ) ---
-with tab2:
-    if dosya_urun:
         try:
-            xl = pd.ExcelFile(dosya_urun)
-            secilen_sayfa = st.selectbox("Kategori", xl.sheet_names)
-            df_urun = pd.read_excel(dosya_urun, sheet_name=secilen_sayfa)
-
-            if len(df_urun.columns) >= 8: # Detaylı Liste
-                # V4'teki hesaplama mantığı aynı kalıyor
-                col_fil = df_urun.columns[2]
-                col_sarf1 = df_urun.columns[5]
-                col_sarf2 = df_urun.columns[7]
-                
-                # Temizle ve Topla
-                for c in [col_fil, col_sarf1, col_sarf2]:
-                    df_urun[c] = df_urun[c].apply(temizle_para)
-                
-                df_urun['TOPLAM_MALIYET'] = df_urun[col_fil] + df_urun[col_sarf1] + df_urun[col_sarf2]
-                
-                # Göster
-                cols = [df_urun.columns[0], df_urun.columns[1], 'TOPLAM_MALIYET']
-                st.dataframe(df_urun[cols], use_container_width=True)
-            else:
-                st.dataframe(df_urun, use_container_width=True)
+            # Hırdavat Sayfası (2. Sayfa)
+            raw_hir = pd.read_excel(dosya_sarf, sheet_name=1, header=1)
+            raw_hir = raw_hir.iloc[:, :8]
+            raw_hir.columns = ['DIN', 'URUN', 'ACIKLAMA', 'STOK', 'ALINAN', 'PAKET_FIYATI', 'TEDARIKCI', 'TARIH']
+            
+            # Hesaplamalar
+            raw_hir = raw_hir.dropna(subset=['PAKET_FIYATI'])
+            raw_hir['PAKET_FIYATI'] = raw_hir['PAKET_FIYATI'].apply(temizle_para)
+            raw_hir['ALINAN'] = raw_hir['ALINAN'].apply(temizle_para)
+            raw_hir['BIRIM_MALIYET'] = raw_hir['PAKET_FIYATI'] / raw_hir['ALINAN']
+            
+            # Seçim Listesi (İsim + Açıklama)
+            raw_hir['FULL_ISIM'] = raw_hir['URUN'].astype(str) + " (" + raw_hir['ACIKLAMA'].astype(str) + ")"
+            df_hir = raw_hir
+            st.success("Depo Bağlandı ✅")
         except:
-            st.error("Ürün listesi okunurken hata.")
-    else:
-        st.info("Yüklü ürün listesi yok.")
+            st.error("Sarf Malzeme dosyası okunamadı.")
 
-# --- TAB 3: DEPO ---
-with tab3:
-    if df_hir is not None:
-        st.dataframe(df_hir[['URUN', 'ACIKLAMA', 'STOK', 'BIRIM_MALIYET']], use_container_width=True)
-    else:
-        st.info("Veri yok.")
+# --- ANA EKRAN ---
+
+if dosya_sarf and dosya_urun and df_hir is not None:
+    
+    # Adım 1: Hangi Listeden Ürün Seçeceğiz?
+    xl_urun = pd.ExcelFile(dosya_urun)
+    sayfa = st.selectbox("1. Adım: Kategori Seç", xl_urun.sheet_names)
+    
+    # O sayfayı oku
+    df_urun_sayfa = pd.read_excel(dosya_urun, sheet_name=sayfa)
+    
+    # Ürün Seçimi İçin Listeyi Hazırla (Kod + İsim)
+    # Genelde 1. sütun Kod, 2. sütun İsim oluyor
+    col_kod = df_urun_sayfa.columns[0]
+    col_isim = df_urun_sayfa.columns[1]
+    
+    # Ürün Listesi Dropdown
+    urun_listesi = df_urun_sayfa[col_kod].astype(str) + " - " + df_urun_sayfa[col_isim].astype(str)
+    secilen_urun_full = st.selectbox("2. Adım: Ürün Seç", urun_listesi)
+    
+    st.divider()
+
+    # --- ÇALIŞMA ALANI ---
+    col_sol, col_sag = st.columns([1, 2])
+
+    with col_sol:
+        st.subheader("🛠️ BOM Hazırla")
+        st.info(f"Şu an işlem yapılan: **{secilen_urun_full}**")
+        
+        # BOM EKLEME FORMU
+        st.write("Depodan Parça Ekle:")
+        secilen_parca = st.selectbox("Parça Ara", df_hir['FULL_ISIM'].unique())
+        adet = st.number_input("Adet", min_value=1, value=1)
+        
+        if st.button("Listeye Ekle ➕"):
+            # Seçilen parçanın maliyetini bul
+            parca_data = df_hir[df_hir['FULL_ISIM'] == secilen_parca].iloc[0]
+            birim_fiyat = parca_data['BIRIM_MALIYET']
+            
+            st.session_state.bom_listesi.append({
+                "Tip": "Hırdavat",
+                "Malzeme": secilen_parca,
+                "Adet": adet,
+                "Birim Maliyet": birim_fiyat,
+                "Toplam": adet * birim_fiyat
+            })
+            st.success("Eklendi")
+
+        st.markdown("---")
+        st.write("Filament Ekle:")
+        fil_gram = st.number_input("Gramaj", value=0)
+        fil_fiyat = st.number_input("Gram Maliyeti", value=0.5)
+        
+        if st.button("Filament Ekle 🧵"):
+             st.session_state.bom_listesi.append({
+                "Tip": "Filament",
+                "Malzeme": "Filament Tüketimi",
+                "Adet": fil_gram,
+                "Birim Maliyet": fil_fiyat,
+                "Toplam": fil_gram * fil_fiyat
+            })
+
+        st.markdown("---")
+        if st.button("Temizle / Sıfırla 🗑️"):
+            st.session_state.bom_listesi = []
+            st.rerun()
+
+    with col_sag:
+        st.subheader("🧾 Maliyet Hesap Tablosu")
+        
+        if st.session_state.bom_listesi:
+            df_bom = pd.DataFrame(st.session_state.bom_listesi)
+            
+            # Tabloyu Göster
+            st.dataframe(df_bom, use_container_width=True)
+            
+            # TOPLAM HESAP
+            toplam_tutar = df_bom['Toplam'].sum()
+            
+            st.markdown(f"""
+            ### 💰 TOPLAM MALİYET: :green[{top
