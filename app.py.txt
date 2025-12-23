@@ -1,0 +1,81 @@
+import streamlit as st
+import pandas as pd
+import sqlite3
+
+# Sayfa Ayarları
+st.set_page_config(page_title="3D Atölye ERP", layout="wide")
+
+# Veritabanı Bağlantısı (Bellekte çalışır, sayfa yenilenince sıfırlanır - Cloud için en basiti budur)
+# İleride kalıcı veritabanı istersen Google Sheets bağlarız.
+conn = sqlite3.connect(':memory:', check_same_thread=False)
+
+def excel_islee(uploaded_file):
+    try:
+        # Filamentleri Oku
+        df_fil = pd.read_excel(uploaded_file, sheet_name=0)
+        
+        # Hırdavatları Oku (Sadece soldaki tabloyu alıyoruz)
+        df_hir = pd.read_excel(uploaded_file, sheet_name=1, usecols="A:H")
+        
+        # Temizlik
+        df_hir = df_hir.dropna(subset=['ALIŞ FİYATI']) # Boş satırları at
+        df_hir = df_hir[df_hir['ALIŞ FİYATI'].apply(lambda x: str(x).isnumeric() or isinstance(x, (int, float)))]
+        
+        # Maliyet Hesabı
+        df_hir['Birim Maliyet'] = df_hir['ALIŞ FİYATI'] / df_hir['ALINAN ADET']
+        
+        return df_fil, df_hir
+    except Exception as e:
+        return None, None
+
+st.title("🛠️ Bulut Atölye ERP")
+st.write("Excel dosyanı yükle, stoklarını ve maliyetlerini anında gör.")
+
+dosya = st.file_uploader("SARF MALZEME.xlsx Dosyanı Buraya Bırak", type=['xlsx'])
+
+if dosya:
+    fil_df, hir_df = excel_islee(dosya)
+    
+    if fil_df is not None:
+        st.success("Dosya başarıyla okundu!")
+        
+        tab1, tab2, tab3 = st.tabs(["🧵 Filamentler", "🔩 Hırdavat & Maliyet", "📋 BOM (Reçete) Hesapla"])
+        
+        with tab1:
+            st.dataframe(fil_df, use_container_width=True)
+            
+            # Özet Bilgi
+            aktifler = fil_df[fil_df['DURUM'] == 'AKTİF'].shape[0]
+            st.info(f"Şu an makinede takılı {aktifler} makara filament var.")
+
+        with tab2:
+            st.dataframe(hir_df[['ÜRÜN ADI', 'ÜRÜN \nAÇKLAMA', 'STOK\nADET', 'Birim Maliyet']], use_container_width=True)
+            st.caption("Not: Birim maliyetler paket fiyatından otomatik hesaplandı.")
+
+        with tab3:
+            st.header("Maliyet Hesaplayıcı")
+            st.write("Bir ürün için ne harcayacağını seç, maliyeti gör.")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                secilen_somun = st.selectbox("Hırdavat Seç", hir_df['ÜRÜN ADI'] + " " + hir_df['ÜRÜN \nAÇKLAMA'])
+                adet = st.number_input("Kaç tane lazım?", min_value=1, value=4)
+            
+            with col2:
+                # Seçilen ürünün fiyatını bul
+                secilen_veri = hir_df[hir_df['ÜRÜN ADI'] + " " + hir_df['ÜRÜN \nAÇKLAMA'] == secilen_somun].iloc[0]
+                birim_fiyat = secilen_veri['Birim Maliyet']
+                toplam_hirdavat = birim_fiyat * adet
+                
+                st.metric("Hırdavat Maliyeti", f"{toplam_hirdavat:.2f} TL")
+            
+            st.divider()
+            filament_gr = st.number_input("Tahmini Filament Harcaması (Gram)", value=100)
+            # Ortalama filament maliyeti (Basit hesap: 600 TL / 1000gr = 0.6 TL/gr)
+            filament_maliyet = filament_gr * 0.6 
+            st.metric("Filament Maliyeti (Tahmini)", f"{filament_maliyet:.2f} TL")
+            
+            st.success(f"TOPLAM ÜRETİM MALİYETİ: {toplam_hirdavat + filament_maliyet:.2f} TL")
+
+    else:
+        st.error("Excel formatında bir hata var, lütfen sütunları kontrol et.")
