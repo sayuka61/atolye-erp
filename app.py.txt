@@ -5,77 +5,81 @@ import sqlite3
 # Sayfa Ayarları
 st.set_page_config(page_title="3D Atölye ERP", layout="wide")
 
-# Veritabanı Bağlantısı (Bellekte çalışır, sayfa yenilenince sıfırlanır - Cloud için en basiti budur)
-# İleride kalıcı veritabanı istersen Google Sheets bağlarız.
-conn = sqlite3.connect(':memory:', check_same_thread=False)
-
 def excel_islee(uploaded_file):
     try:
-        # Filamentleri Oku
+        # 1. FİLAMENT SAYFASINI OKU
+        # Filament sayfan düzgün, direkt okuyoruz
         df_fil = pd.read_excel(uploaded_file, sheet_name=0)
         
-        # Hırdavatları Oku (Sadece soldaki tabloyu alıyoruz)
-        df_hir = pd.read_excel(uploaded_file, sheet_name=1, usecols="A:H")
+        # 2. HIRDAVAT SAYFASINI OKU (ÖNEMLİ DÜZELTME BURADA)
+        # header=1 diyoruz ki en üstteki "STANDART MALZEMELER" yazısını atlasın.
+        df_hir = pd.read_excel(uploaded_file, sheet_name=1, header=1, usecols="A:H")
         
-        # Temizlik
-        df_hir = df_hir.dropna(subset=['ALIŞ FİYATI']) # Boş satırları at
-        df_hir = df_hir[df_hir['ALIŞ FİYATI'].apply(lambda x: str(x).isnumeric() or isinstance(x, (int, float)))]
+        # Sütun isimlerini biz verelim ki Excel'deki "ÜRÜN\nADI" gibi alt satıra geçen yazılar hata vermesin
+        df_hir.columns = ['DIN_KOD', 'URUN_ADI', 'ACIKLAMA', 'STOK_ADET', 'ALINAN_ADET', 'ALIS_FIYATI', 'TEDARIKCI', 'TARIH']
         
-        # Maliyet Hesabı
-        df_hir['Birim Maliyet'] = df_hir['ALIŞ FİYATI'] / df_hir['ALINAN ADET']
+        # Temizlik: Fiyatı boş olan veya sayı olmayan satırları at
+        df_hir = df_hir.dropna(subset=['ALIS_FIYATI'])
+        df_hir = df_hir[pd.to_numeric(df_hir['ALIS_FIYATI'], errors='coerce').notnull()]
+        
+        # Maliyet Hesabı (Toplam Fiyat / Toplam Adet)
+        df_hir['Birim_Maliyet'] = df_hir['ALIS_FIYATI'] / df_hir['ALINAN_ADET']
         
         return df_fil, df_hir
     except Exception as e:
+        st.error(f"Hata Detayı: {e}")
         return None, None
 
 st.title("🛠️ Bulut Atölye ERP")
-st.write("Excel dosyanı yükle, stoklarını ve maliyetlerini anında gör.")
+st.markdown("---")
 
-dosya = st.file_uploader("SARF MALZEME.xlsx Dosyanı Buraya Bırak", type=['xlsx'])
+dosya = st.file_uploader("SARF MALZEME.xlsx Dosyanı Yükle", type=['xlsx'])
 
 if dosya:
     fil_df, hir_df = excel_islee(dosya)
     
-    if fil_df is not None:
-        st.success("Dosya başarıyla okundu!")
+    if fil_df is not None and hir_df is not None:
+        st.success("✅ Excel Başarıyla Okundu!")
         
-        tab1, tab2, tab3 = st.tabs(["🧵 Filamentler", "🔩 Hırdavat & Maliyet", "📋 BOM (Reçete) Hesapla"])
+        tab1, tab2, tab3 = st.tabs(["🧵 Filament Stok", "🔩 Hırdavat & Maliyet", "💰 Ürün Maliyet Hesapla"])
         
         with tab1:
             st.dataframe(fil_df, use_container_width=True)
-            
-            # Özet Bilgi
-            aktifler = fil_df[fil_df['DURUM'] == 'AKTİF'].shape[0]
-            st.info(f"Şu an makinede takılı {aktifler} makara filament var.")
+            # Kısa özet
+            st.info(f"Toplam {len(fil_df)} makara filament kaydı var.")
 
         with tab2:
-            st.dataframe(hir_df[['ÜRÜN ADI', 'ÜRÜN \nAÇKLAMA', 'STOK\nADET', 'Birim Maliyet']], use_container_width=True)
-            st.caption("Not: Birim maliyetler paket fiyatından otomatik hesaplandı.")
+            # Sadece önemli sütunları gösterelim
+            gosterilecek_tablo = hir_df[['URUN_ADI', 'ACIKLAMA', 'STOK_ADET', 'Birim_Maliyet']].copy()
+            st.dataframe(gosterilecek_tablo, use_container_width=True)
+            st.caption("ℹ️ Birim maliyetler, paket fiyatının adede bölünmesiyle hesaplanmıştır.")
 
         with tab3:
             st.header("Maliyet Hesaplayıcı")
-            st.write("Bir ürün için ne harcayacağını seç, maliyeti gör.")
             
             col1, col2 = st.columns(2)
             with col1:
-                secilen_somun = st.selectbox("Hırdavat Seç", hir_df['ÜRÜN ADI'] + " " + hir_df['ÜRÜN \nAÇKLAMA'])
-                adet = st.number_input("Kaç tane lazım?", min_value=1, value=4)
-            
-            with col2:
-                # Seçilen ürünün fiyatını bul
-                secilen_veri = hir_df[hir_df['ÜRÜN ADI'] + " " + hir_df['ÜRÜN \nAÇKLAMA'] == secilen_somun].iloc[0]
-                birim_fiyat = secilen_veri['Birim Maliyet']
-                toplam_hirdavat = birim_fiyat * adet
+                # Kullanıcıya listeden ürün seçtiriyoruz
+                liste = hir_df['URUN_ADI'].astype(str) + " - " + hir_df['ACIKLAMA'].astype(str)
+                secim = st.selectbox("Malzeme Seç", liste)
+                adet = st.number_input("Kaç Adet Lazım?", min_value=1, value=1)
                 
-                st.metric("Hırdavat Maliyeti", f"{toplam_hirdavat:.2f} TL")
+            with col2:
+                # Seçilen ürünün fiyatını bulup hesaplıyoruz
+                secilen_veri = hir_df.iloc[liste[liste == secim].index[0]]
+                birim_fiyat = secilen_veri['Birim_Maliyet']
+                
+                hirdavat_tutari = birim_fiyat * adet
+                st.metric("Parça Maliyeti", f"{hirdavat_tutari:.2f} TL")
             
             st.divider()
-            filament_gr = st.number_input("Tahmini Filament Harcaması (Gram)", value=100)
-            # Ortalama filament maliyeti (Basit hesap: 600 TL / 1000gr = 0.6 TL/gr)
-            filament_maliyet = filament_gr * 0.6 
-            st.metric("Filament Maliyeti (Tahmini)", f"{filament_maliyet:.2f} TL")
             
-            st.success(f"TOPLAM ÜRETİM MALİYETİ: {toplam_hirdavat + filament_maliyet:.2f} TL")
+            # Filament Hesabı
+            f_gram = st.number_input("Harcanacak Filament (Gram)", value=50)
+            f_birim_fiyat = st.number_input("Filament Gram Maliyeti (Ortalama 0.6 TL)", value=0.60)
+            fil_tutari = f_gram * f_birim_fiyat
+            
+            st.warning(f"TOPLAM MALİYET: {hirdavat_tutari + fil_tutari:.2f} TL")
 
     else:
-        st.error("Excel formatında bir hata var, lütfen sütunları kontrol et.")
+        st.warning("Dosya okunurken bir sorun oldu. Lütfen sütun başlıklarını kontrol et.")
