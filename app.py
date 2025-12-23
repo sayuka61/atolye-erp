@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="3D ERP V10", layout="wide")
+st.set_page_config(page_title="3D ERP V12 - Serbest Mod", layout="wide")
 
-# --- YARDIMCI: PARA TEMİZLEME ---
+# --- FONKSİYONLAR ---
 def temizle_para(deger):
     if pd.isna(deger): return 0.0
     if isinstance(deger, (int, float)): return float(deger)
@@ -13,13 +13,13 @@ def temizle_para(deger):
     except:
         return 0.0
 
-st.title("🏭 3D Atölye ERP (V10 Final)")
+st.title("🏭 3D Atölye ERP (V12 - Serbest Mod)")
 
 # --- HAFIZA ---
 if 'bom' not in st.session_state:
     st.session_state.bom = []
 
-# --- SOL MENÜ: AYARLAR ---
+# --- SOL MENÜ: DOSYALAR ---
 with st.sidebar:
     st.header("1. Dosyaları Yükle")
     dosya_sarf = st.file_uploader("SARF MALZEME.xlsx", type=['xlsx'], key="sarf")
@@ -31,46 +31,36 @@ with st.sidebar:
     df_depo = None
     if dosya_sarf:
         try:
-            # Kullanıcıya sor: Hangi sayfa?
             xl = pd.ExcelFile(dosya_sarf)
-            sayfa = st.selectbox("Depo Sayfası (Genelde 2. Sayfa)", xl.sheet_names, index=1)
-            
-            # Veriyi oku
+            sayfa = st.selectbox("Depo Sayfası", xl.sheet_names, index=1)
             raw = pd.read_excel(dosya_sarf, sheet_name=sayfa, header=1)
             
-            # Sütunları düzenle (İlk 8 sütun)
             if len(raw.columns) >= 6:
                 raw = raw.iloc[:, :8]
                 raw.columns = ['DIN', 'URUN', 'ACIKLAMA', 'STOK', 'ALINAN', 'PAKET', 'TEDARIKCI', 'TARIH']
-                
-                # Temizlik
                 raw = raw.dropna(subset=['PAKET'])
                 raw['PAKET'] = raw['PAKET'].apply(temizle_para)
                 raw['ALINAN'] = raw['ALINAN'].apply(temizle_para)
                 raw = raw[raw['ALINAN'] > 0]
-                
-                # Birim Maliyet
                 raw['BIRIM'] = raw['PAKET'] / raw['ALINAN']
                 raw['ISIM'] = raw['URUN'].astype(str) + " - " + raw['ACIKLAMA'].astype(str)
-                
                 df_depo = raw
-                st.success(f"✅ Depo Hazır: {len(df_depo)} Parça")
+                st.success(f"✅ Depo Hazır ({len(df_depo)} Parça)")
             else:
-                st.error("Seçilen sayfada sütun eksik.")
+                st.error("Sütun sayısı eksik.")
         except Exception as e:
             st.error(f"Hata: {e}")
 
 # --- ANA EKRAN ---
 if dosya_sarf and dosya_urun and df_depo is not None:
     
-    st.subheader("2. Ürün ve Reçete İşlemleri")
+    st.subheader("2. Reçete Hazırlama")
     
     try:
         xl_ur = pd.ExcelFile(dosya_urun)
-        sayfa_ur = st.selectbox("Ürün Kategorisi", xl_ur.sheet_names)
+        sayfa_ur = st.selectbox("Kategori", xl_ur.sheet_names)
         df_ur = pd.read_excel(dosya_urun, sheet_name=sayfa_ur)
         
-        # Ürün Listesi (Kod - İsim)
         if len(df_ur.columns) >= 2:
             col_kod = df_ur.columns[0]
             col_ad = df_ur.columns[1]
@@ -79,71 +69,104 @@ if dosya_sarf and dosya_urun and df_depo is not None:
             
             st.markdown("---")
             
-            # --- HESAPLAMA ALANI ---
             c1, c2 = st.columns([1, 1])
             
-            # SOL: EKLEME
+            # --- SOL TARAF: PARÇA EKLEME ---
             with c1:
                 st.info("👇 Malzeme Ekle")
                 
-                # 1. Hırdavat
-                parca = st.selectbox("Depodan Parça", df_depo['ISIM'].unique())
-                adet = st.number_input("Adet", min_value=1, value=1)
+                # SEKMELİ YAPI (Depodan Seç / Elle Yaz / Renk)
+                tab_depo, tab_manuel, tab_renk = st.tabs(["📦 Depodan Seç", "✏️ Elle Yaz", "🎨 Renk Ekle"])
                 
-                if st.button("Parça Ekle ➕"):
-                    veri = df_depo[df_depo['ISIM'] == parca].iloc[0]
-                    st.session_state.bom.append({
-                        "Tür": "Parça",
-                        "İsim": parca,
-                        "Miktar": adet,
-                        "Birim": veri['BIRIM'],
-                        "Toplam": adet * veri['BIRIM']
-                    })
-                
-                st.write("") # Boşluk
-                
-                # 2. Filament
-                gram = st.number_input("Filament (Gram)", value=0)
-                gram_tl = st.number_input("Gram Fiyatı (TL)", value=0.60)
-                
-                if st.button("Filament Ekle 🧶"):
-                    st.session_state.bom.append({
-                        "Tür": "Filament",
-                        "İsim": "Filament Tüketimi",
-                        "Miktar": gram,
-                        "Birim": gram_tl,
-                        "Toplam": gram * gram_tl
-                    })
+                # 1. DEPO SEÇİMİ (Otomatik)
+                with tab_depo:
+                    parca_secimi = st.selectbox("Parça Ara (Switch, Vida vb.)", df_depo['ISIM'].unique())
+                    adet_depo = st.number_input("Adet", min_value=1, value=1, key="adet_depo")
                     
-                st.write("")
-                if st.button("TEMİZLE 🗑️", type="primary"):
+                    if st.button("Depodan Ekle ➕"):
+                        veri = df_depo[df_depo['ISIM'] == parca_secimi].iloc[0]
+                        st.session_state.bom.append({
+                            "Tür": "Parça",
+                            "İsim": parca_secimi,
+                            "Miktar": f"{adet_depo} Adet",
+                            "Birim Maliyet": veri['BIRIM'],
+                            "Tutar": adet_depo * veri['BIRIM']
+                        })
+                        st.success("Eklendi")
+
+                # 2. MANUEL GİRİŞ (Excel'de olmayanlar için)
+                with tab_manuel:
+                    st.write("Listede bulamadıysan buradan ekle:")
+                    manuel_isim = st.text_input("Parça Adı (Örn: Duy Seti)", "")
+                    manuel_adet = st.number_input("Adet", min_value=1, value=1, key="adet_man")
+                    manuel_fiyat = st.number_input("Birim Maliyeti (TL)", value=0.0)
+                    
+                    if st.button("Manuel Ekle ➕"):
+                        if manuel_isim:
+                            st.session_state.bom.append({
+                                "Tür": "Ekstra",
+                                "İsim": manuel_isim,
+                                "Miktar": f"{manuel_adet} Adet",
+                                "Birim Maliyet": manuel_fiyat,
+                                "Tutar": manuel_adet * manuel_fiyat
+                            })
+                            st.success("Manuel Eklendi")
+                        else:
+                            st.warning("Lütfen isim yaz.")
+
+                # 3. RENK SEÇİMİ
+                with tab_renk:
+                    renkler = ["SİYAH", "BEYAZ", "GRİ", "KIRMIZI", "MAVİ", "SARI", "YEŞİL", "TURUNCU", "MOR", "KAHVERENGİ", "TEN RENGİ", "PEMBE", "ŞEFFAF"]
+                    secilen_renk = st.selectbox("Filament Rengi", renkler)
+                    ozel_renk = st.text_input("Veya Özel Renk Yaz", "")
+                    renk_final = ozel_renk if ozel_renk else secilen_renk
+                    
+                    if st.button("Rengi Ekle 🖌️"):
+                        st.session_state.bom.append({
+                            "Tür": "Renk",
+                            "İsim": f"{renk_final} Filament",
+                            "Miktar": "-",
+                            "Birim Maliyet": 0,
+                            "Tutar": 0.0
+                        })
+                        st.success("Renk Eklendi")
+
+                st.divider()
+                if st.button("LİSTEYİ SIFIRLA 🗑️", type="primary"):
                     st.session_state.bom = []
                     st.rerun()
 
-            # SAĞ: LİSTE VE SONUÇ
+            # --- SAĞ TARAF: LİSTE ---
             with c2:
-                st.success("🧾 Reçete Özeti")
+                st.success("🧾 Üretim Reçetesi (BOM)")
                 
                 if st.session_state.bom:
                     df_bom = pd.DataFrame(st.session_state.bom)
-                    st.dataframe(df_bom, use_container_width=True)
                     
-                    toplam = df_bom['Toplam'].sum()
+                    st.dataframe(
+                        df_bom, 
+                        column_config={
+                            "Birim Maliyet": st.column_config.NumberColumn(format="%.2f TL"),
+                            "Tutar": st.column_config.NumberColumn(format="%.2f TL")
+                        },
+                        use_container_width=True
+                    )
+                    
+                    toplam = df_bom['Tutar'].sum()
                     st.metric("TOPLAM MALİYET", f"{toplam:.2f} TL")
                     
-                    # Eski Veriyi Göster
-                    with st.expander("Eski Excel Verisi (Kıyasla)"):
+                    with st.expander("Kıyaslama (Eski Veri)"):
                         kod = secilen.split(' | ')[0]
                         eski = df_ur[df_ur[col_kod].astype(str) == kod]
                         st.dataframe(eski)
                 else:
-                    st.warning("Henüz malzeme eklenmedi.")
+                    st.info("Reçete boş.")
                     
         else:
-            st.error("Ürün listesinde sütunlar eksik.")
+            st.error("Ürün listesi sütunları eksik.")
             
     except Exception as e:
-        st.error(f"Ürün listesi hatası: {e}")
+        st.error(f"Hata: {e}")
 
 else:
-    st.info("👈 Lütfen soldan dosyaları yükle.")
+    st.info("👈 Dosyaları yükleyerek başla.")
